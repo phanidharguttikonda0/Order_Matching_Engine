@@ -11,11 +11,13 @@ In a Second 200/0.00463 approx 43K requests per second.
 
 #### After commenting unnecessary print statements
 
-Average : 1.61 ms
+over 4 times i have ran the cargo bench, these are results
 
-Slowest : 1.21 ms
+Average : 1.61 ms, 1.15 ms, 1.15 ms, 1.71 ms 
 
-Fastest : 2.19
+Fastest : 1.21 ms, 1.00 ms, 1.06 ms, 1.36 ms
+
+Slowest : 2.19 ms, 1.33 ms, 1.24 ms, 2.13 ms
 
 Totally 123K requests per second 2.8x faster than previous,
 

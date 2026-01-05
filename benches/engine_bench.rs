@@ -1,26 +1,24 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use matching_engine::{buy_order, order_book, sell_order}; // Imports your functions
+use matching_engine::{order_book, MatchingEngine}; // Imports your functions
 use std::collections::BTreeMap;
 
 fn benchmark_orders(c: &mut Criterion) {
     c.bench_function("buy_sell_cycle", |b| {
         b.iter(|| {
             // 1. Setup the data structures (Just like in your main)
-            let mut buy_orders: order_book = BTreeMap::new();
-            let mut sell_orders: order_book = BTreeMap::new();
+            let mut matching_engine = MatchingEngine::new() ;
 
             // 2. Run a loop of interactions
             // We simulate 100 orders to get a stable average
             for i in 0..100 {
                 let price = 10000; // 100.00
                 let quantity = 10;
-                let id = i as u64;
 
                 // Place a Buy
-                buy_order(quantity, price, &mut buy_orders, &mut sell_orders, id);
+                matching_engine.buy_order(quantity, price) ;
 
                 // Place a Sell (Matches immediately)
-                sell_order(quantity, price, &mut buy_orders, &mut sell_orders, id);
+                matching_engine.sell_order(quantity, price) ;
             }
         })
     });
