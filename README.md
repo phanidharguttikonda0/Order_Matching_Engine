@@ -47,12 +47,12 @@ Totally 1.1M requests per second , 9.5x faster than previous.
 
 Running I/O tasks in the background made the total Execution too Fast.
 
-### Changing Goal of executing 1.5M per second to 5M per second.
-
 
 ##### Phase - 2.2
 
 ###### Design
 
 ###### Making all Operations in O(1), Not Only that making sure that CPU travelling time is also reduced, basically when we store a struct value in RAM it will be stored here and there for each and every value the CPU needs to travel long distance, so packing every Order Linerly, such that CPU can directly jump to that address, where CPU travelling Time will be reduced. Making it more efficient and Faster.
+
+#### Not a Big Change in Results it became standard and executing 1.2 M Requests per second
 
