@@ -14,11 +14,8 @@ fn main() {
         // This loop runs forever in the background
         while let Ok(event) = receiver.recv() {
             match event {
-                LogEvent::OrderPlaced { id, price, order_type, quantity } => {
-                    println!("[LOG] {:?} Order #{} Placed: {} @ {}", order_type, id, quantity, price);
-                }
-                LogEvent::OrderExecuted { price, qty, remaining_quantity, order_type } => {
-                    println!("[LOG] ⚡ {:?} TRADE! Sold {} @ {} and remaining quantity to be executed was {}", order_type, qty, price, remaining_quantity);
+                LogEvent::OrderExecuted { price, qty,  order_type } => {
+                    println!("[LOG] ⚡ {:?} TRADE! Sold {} @ {} ", order_type, qty, price);
                 }
             }
         }
@@ -37,12 +34,12 @@ fn main() {
         if order_type == "buy" {
             let quantity: u32 = order_result[1].parse().unwrap() ;
             let price: f32 = order_result[2].split("\n").collect::<Vec<&str>>()[0].parse().unwrap() ;
-            let price: u64 = (price * 100.0 )as u64;
+            let price: u64 = (price * 100.0 )as u64; // converting to paisa
             matching_engine.buy_order(quantity, price) ;
         }else if order_type == "sell" {
             let quantity: u32 = order_result[1].parse().unwrap() ;
             let price: f32 = order_result[2].split("\n").collect::<Vec<&str>>()[0].parse().unwrap() ;
-            let price: u64 = (price * 100.0 )as u64;
+            let price: u64 = (price * 100.0 )as u64; // converting to paisa
             matching_engine.sell_order(quantity, price) ;
         }else {
             println!("--------------------------------------------") ;

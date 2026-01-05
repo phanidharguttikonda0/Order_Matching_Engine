@@ -10,7 +10,7 @@ fn benchmark_orders(c: &mut Criterion) {
             let mut matching_engine = MatchingEngine::new(tx) ;
 
             // 2. Run a loop of interactions
-            // We simulate 100 orders to get a stable average
+            // We simulate 1000 orders to get a stable average
             for _ in 0..100 {
                 let price = 10000; // 100.00
                 let quantity = 10;

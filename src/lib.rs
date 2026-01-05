@@ -1,206 +1,209 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap};
 use crossbeam_channel::Sender;
 
 #[derive(Clone, Debug)]
 pub struct Order {
-    pub id: u64, // starting with 's' is a sell order , 'b' is a buy order .
+    pub id: u64,
     pub quantity: u32,
-    pub price: u64
+    pub price: u64,
+    pub next: Option<usize> // The "Pointer"
 }
 
+pub type OrderBook = BTreeMap<u64, (usize, usize)>; // (Head, Tail)
 
-pub type order_book = BTreeMap<u64, VecDeque<Order>>;
-
-#[derive(Debug)]
-pub enum OrderType {
-    Buy,
-    Sell
-}
-
+#[derive(Debug, Clone, Copy)]
+pub enum OrderType { Buy, Sell }
 
 pub enum LogEvent {
-    OrderPlaced { id: u64, quantity: u32, price: u64,  order_type: OrderType},
-    OrderExecuted { price: u64, qty: u32, remaining_quantity: u32, order_type: OrderType }
+    OrderExecuted { price: u64, qty: u32, order_type: OrderType }
 }
 
-
-#[derive(Debug)]
 pub struct MatchingEngine {
-    pub buy_order_book: order_book,
-    pub sell_order_book: order_book,
+    pub buy_order_book: OrderBook,
+    pub sell_order_book: OrderBook,
     pub buy_orders_count: u64,
     pub sell_orders_count: u64,
-    pub log_sender: Sender<LogEvent>
+    pub log_sender: Sender<LogEvent>,
+    pub orders: Vec<Order>,      // The Arena
+    pub free_spots: Vec<usize>   // The Recycle Bin
 }
 
-
 impl MatchingEngine {
-
     pub fn new(log_sender: Sender<LogEvent>) -> MatchingEngine {
         MatchingEngine {
             buy_orders_count: 0,
             sell_orders_count: 0,
             buy_order_book: BTreeMap::new(),
             sell_order_book: BTreeMap::new(),
-            log_sender
+            log_sender,
+            orders: Vec::with_capacity(100_000), // PRE-ALLOCATE! Critical for speed
+            free_spots: Vec::new()
         }
     }
 
-    pub fn buy_order(&mut self, quantity: u32, price: u64) {
-        let buy_orders = &mut self.buy_order_book ;
-        let sell_orders = &mut self.sell_order_book ;
+    // --- Helper to manage Arena memory ---
+    fn allocate_order(&mut self, order: Order) -> usize {
+        if let Some(index) = self.free_spots.pop() {
+            self.orders[index] = order;
+            index
+        } else {
+            let index = self.orders.len();
+            self.orders.push(order);
+            index
+        }
+    }
+
+    pub fn buy_order(&mut self, mut quantity: u32, price: u64) {
         self.buy_orders_count += 1;
-        let id = self.buy_orders_count ;
 
-        let mut order = Order{
-            id, // we are going to make random later
-            quantity,
-            price
-        } ;
+        // 1. Check Sells (Lowest Price First)
+        // We collect keys to avoid borrowing self.sell_order_book while mutating self.orders
+        let prices: Vec<u64> = self.sell_order_book
+            .range(..=price)
+            .map(|(p, _)| *p)
+            .collect();
 
-        /*
-            we need to figure out least value order and then from that point we need to loop through each and
-            every price point, so sell the Order
-        */
-        let price_listing_orders: Vec<u64> =
-            sell_orders.range(..=price).map(|val| val.0.clone()).collect();
+        for p in prices {
+            if quantity == 0 { break; }
 
-        
+            // Inner Loop: Consume the Linked List at this price
+            loop {
+                // Get Head Index safely
+                let head_index = match self.sell_order_book.get(&p) {
+                    Some(&(head, _)) => head,
+                    None => break, // Price level exhausted
+                };
 
-        if price_listing_orders.len() > 0 {
-            let mut remaining_required_stocks = quantity as i64 ;
-            let mut remove_prices = vec![] ;
-            for price in price_listing_orders.iter() {
+                // Access the Order in Arena
+                // We use a block to limit the borrow scope of 'order'
+                let (should_remove, next_ptr, matched_qty) = {
+                    let order = &mut self.orders[head_index];
 
-                // now we are going to match the orders
-                let mut iterate = true ;
+                    let trade_qty = std::cmp::min(quantity, order.quantity);
+                    quantity -= trade_qty;
+                    order.quantity -= trade_qty;
 
-                let order_queue = sell_orders.get_mut(price).unwrap();
-                while iterate {
-                    remaining_required_stocks = remaining_required_stocks - order_queue[0].quantity as i64 ;
-                    if remaining_required_stocks <= 0 {
-                        if remaining_required_stocks == 0 {
-                            order_queue.pop_front().unwrap() ;
-                            if order_queue.len() == 0 {
-                                remove_prices.push(price) ;
-                            }
-                        }else {
-                            order_queue[0].quantity = (remaining_required_stocks * -1) as u32 ;
+                    // Send Log (Non-blocking)
+                    let _ = self.log_sender.try_send(LogEvent::OrderExecuted {
+                        qty: trade_qty, price: p, order_type: OrderType::Buy
+                    });
+
+                    // Return data to update state outside the borrow
+                    (order.quantity == 0, order.next, trade_qty)
+                };
+
+                // Cleanup Logic
+                if should_remove {
+                    // 1. Recycle the spot
+                    self.free_spots.push(head_index);
+
+                    // 2. Move Head Pointer
+                    if let Some(next_index) = next_ptr {
+                        // Update Book to point to next
+                        if let Some(entry) = self.sell_order_book.get_mut(&p) {
+                            entry.0 = next_index;
                         }
-                        self.log_sender.try_send(LogEvent::OrderExecuted {
-                            qty: quantity, remaining_quantity: 0, price: *price, order_type: OrderType::Buy
-                        }).expect("unable to sent Log Event") ;
-                        iterate = false ;
-                    }else{
-                        order_queue.pop_front().unwrap() ;
-                        if order_queue.len() == 0 {
-                            remove_prices.push(price) ;
-                            iterate = false ;
-                        }
+                    } else {
+                        // No next item, remove price level entirely
+                        self.sell_order_book.remove(&p);
+                        break; // Move to next price
                     }
-                }
-
-                if remaining_required_stocks == 0 {
+                } else {
+                    // Order not filled (Buyer ran out of qty), stop everything
                     break;
                 }
-            }
-            if remaining_required_stocks > 0 {
-                order.quantity = remaining_required_stocks as u32 ;
-                //println!("remaining required quantity was {}", order.quantity) ;
-                let mut value = VecDeque::new() ;
-                value.push_back(order) ;
-                buy_orders.insert(price, value) ;
-            }
 
-            for price in remove_prices {
-                sell_orders.remove(price).unwrap() ;
+                if quantity == 0 { break; }
             }
-        }else {
-            // println!("no order exists, so storing the order and executing when ever an order matches") ;
-            let mut val: VecDeque<Order> = VecDeque::new() ;
-            val.push_back(order) ;
-            buy_orders.insert(price, val) ;
-            self.log_sender.try_send(LogEvent::OrderPlaced {
-                price, order_type: OrderType::Buy, id: self.buy_orders_count, quantity
-            }).expect("unable to sent Log Event") ;
+        }
+
+        // 2. If Quantity Remains, Add to Buy Book
+        if quantity > 0 {
+            let order = Order {
+                id: self.buy_orders_count,
+                quantity,
+                price,
+                next: None
+            };
+
+            let index = self.allocate_order(order);
+
+            // Link it
+            self.buy_order_book.entry(price)
+                .and_modify(|(_, tail)| {
+                    // Update OLD tail to point to NEW index
+                    self.orders[*tail].next = Some(index);
+                    // Update tail to be NEW index
+                    *tail = index;
+                })
+                .or_insert((index, index));
         }
     }
 
-
-    pub fn sell_order(&mut self, quantity: u32, price: u64) {
-        let buy_orders = &mut self.buy_order_book ;
-        let sell_orders = &mut self.sell_order_book ;
+    // Mirror logic for sell_order...
+    pub fn sell_order(&mut self, mut quantity: u32, price: u64) {
         self.sell_orders_count += 1;
-        let id = self.sell_orders_count ;
 
-        let mut order = Order{
-            id, // we are going to make random later
-            quantity,
-            price
-        } ;
+        // Reverse iterator for Bids (Highest First)
+        let prices: Vec<u64> = self.buy_order_book
+            .range(price..)
+            .rev() // <--- CRITICAL
+            .map(|(p, _)| *p)
+            .collect();
 
-        let price_listing_orders: Vec<u64> = buy_orders.range(price..).map(
-            |value| value.0.clone()
-        ).collect() ;
+        for p in prices {
+            if quantity == 0 { break; }
 
-        if price_listing_orders.len() > 0  {
-            let mut remove_prices = vec![] ;
-            let mut remaining_stocks = quantity as i64;
+            loop {
+                let head_index = match self.buy_order_book.get(&p) {
+                    Some(&(head, _)) => head,
+                    None => break,
+                };
 
-            for price in price_listing_orders.iter().rev(){
+                let (should_remove, next_ptr, _) = {
+                    let order = &mut self.orders[head_index];
+                    let trade_qty = std::cmp::min(quantity, order.quantity);
+                    quantity -= trade_qty;
+                    order.quantity -= trade_qty;
 
-                let mut iterate = true ;
-                let order_queue = buy_orders.get_mut(price).unwrap() ;
+                    let _ = self.log_sender.try_send(LogEvent::OrderExecuted {
+                        qty: trade_qty, price: p, order_type: OrderType::Sell
+                    });
 
-                while iterate {
-                    remaining_stocks =  remaining_stocks - order_queue[0].quantity as i64 ;
-                    if remaining_stocks <= 0 {
-                        if remaining_stocks == 0 {
-                            // we are removing the buy order
-                            order_queue.pop_front().unwrap() ;
-                            if order_queue.len() == 0 {
-                                remove_prices.push(price) ;
-                            }
-                        }else {
-                            order_queue[0].quantity = (remaining_stocks * -1) as u32 ;
+                    (order.quantity == 0, order.next, trade_qty)
+                };
+
+                if should_remove {
+                    self.free_spots.push(head_index);
+                    if let Some(next_index) = next_ptr {
+                        if let Some(entry) = self.buy_order_book.get_mut(&p) {
+                            entry.0 = next_index;
                         }
-                        self.log_sender.try_send(LogEvent::OrderExecuted {
-                            qty: quantity, remaining_quantity: 0, price: *price, order_type: OrderType::Sell
-                        }).expect("unable to sent Log Event") ;
-                        iterate = false ;
-                    }else{
-                        order_queue.pop_front().unwrap() ;
-                        if order_queue.len() == 0 {
-                            remove_prices.push(price) ;
-                            iterate = false ;
-                        }
+                    } else {
+                        self.buy_order_book.remove(&p);
+                        break;
                     }
-                }
-                if remaining_stocks == 0 {
+                } else {
                     break;
                 }
+                if quantity == 0 { break; }
+            }
+        }
 
-            }
-
-            if remaining_stocks > 0 {
-                order.quantity = remaining_stocks as u32 ;
-                let mut val = VecDeque::new() ;
-                val.push_back(order) ;
-                sell_orders.insert(price, val) ;
-            }
-            // println!("let's print remove prices {:#?}", remove_prices) ;
-            for price in remove_prices.iter() {
-                // println!("let's print buy_orders {:#?}", buy_orders) ;
-                buy_orders.remove(price) .unwrap() ;
-            }
-        }else{
-            // println!("No Orders Matched adding to Order Book") ;
-            let mut val: VecDeque<Order> = VecDeque::new() ;
-            val.push_back(order) ;
-            sell_orders.insert(price, val) ;
-            self.log_sender.try_send(LogEvent::OrderPlaced {
-                price, order_type: OrderType::Sell, id: self.sell_orders_count, quantity
-            }).expect("unable to sent Log Event") ;
+        if quantity > 0 {
+            let order = Order {
+                id: self.sell_orders_count,
+                quantity,
+                price,
+                next: None
+            };
+            let index = self.allocate_order(order);
+            self.buy_order_book.entry(price)
+                .and_modify(|(_, tail)| {
+                    self.orders[*tail].next = Some(index);
+                    *tail = index;
+                })
+                .or_insert((index, index));
         }
     }
 }
