@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, VecDeque};
+use crossbeam_channel::Sender;
 
 #[derive(Clone, Debug)]
 pub struct Order {
@@ -11,25 +12,40 @@ pub struct Order {
 pub type order_book = BTreeMap<u64, VecDeque<Order>>;
 
 #[derive(Debug)]
+pub enum OrderType {
+    Buy,
+    Sell
+}
+
+
+pub enum LogEvent {
+    OrderPlaced { id: u64, quantity: u32, price: u64,  order_type: OrderType},
+    OrderExecuted { price: u64, qty: u32, remaining_quantity: u32, order_type: OrderType }
+}
+
+
+#[derive(Debug)]
 pub struct MatchingEngine {
     pub buy_order_book: order_book,
     pub sell_order_book: order_book,
     pub buy_orders_count: u64,
-    pub sell_orders_count: u64
+    pub sell_orders_count: u64,
+    pub log_sender: Sender<LogEvent>
 }
 
 
 impl MatchingEngine {
-    
-    pub fn new() -> MatchingEngine {
+
+    pub fn new(log_sender: Sender<LogEvent>) -> MatchingEngine {
         MatchingEngine {
             buy_orders_count: 0,
             sell_orders_count: 0,
             buy_order_book: BTreeMap::new(),
-            sell_order_book: BTreeMap::new()
+            sell_order_book: BTreeMap::new(),
+            log_sender
         }
     }
-    
+
     pub fn buy_order(&mut self, quantity: u32, price: u64) {
         let buy_orders = &mut self.buy_order_book ;
         let sell_orders = &mut self.sell_order_book ;
@@ -49,7 +65,7 @@ impl MatchingEngine {
         let price_listing_orders: Vec<u64> =
             sell_orders.range(..=price).map(|val| val.0.clone()).collect();
 
-
+        
 
         if price_listing_orders.len() > 0 {
             let mut remaining_required_stocks = quantity as i64 ;
@@ -71,7 +87,9 @@ impl MatchingEngine {
                         }else {
                             order_queue[0].quantity = (remaining_required_stocks * -1) as u32 ;
                         }
-                        println!("Buy Order Matched Successfully") ;
+                        self.log_sender.try_send(LogEvent::OrderExecuted {
+                            qty: quantity, remaining_quantity: 0, price: *price, order_type: OrderType::Buy
+                        }).expect("unable to sent Log Event") ;
                         iterate = false ;
                     }else{
                         order_queue.pop_front().unwrap() ;
@@ -102,11 +120,13 @@ impl MatchingEngine {
             let mut val: VecDeque<Order> = VecDeque::new() ;
             val.push_back(order) ;
             buy_orders.insert(price, val) ;
-            println!("added to buy orders") ;
+            self.log_sender.try_send(LogEvent::OrderPlaced {
+                price, order_type: OrderType::Buy, id: self.buy_orders_count, quantity
+            }).expect("unable to sent Log Event") ;
         }
     }
-    
-    
+
+
     pub fn sell_order(&mut self, quantity: u32, price: u64) {
         let buy_orders = &mut self.buy_order_book ;
         let sell_orders = &mut self.sell_order_book ;
@@ -144,7 +164,9 @@ impl MatchingEngine {
                         }else {
                             order_queue[0].quantity = (remaining_stocks * -1) as u32 ;
                         }
-                        println!("Completed Order Matching Sell Order Executed Successfully") ;
+                        self.log_sender.try_send(LogEvent::OrderExecuted {
+                            qty: quantity, remaining_quantity: 0, price: *price, order_type: OrderType::Sell
+                        }).expect("unable to sent Log Event") ;
                         iterate = false ;
                     }else{
                         order_queue.pop_front().unwrap() ;
@@ -176,7 +198,9 @@ impl MatchingEngine {
             let mut val: VecDeque<Order> = VecDeque::new() ;
             val.push_back(order) ;
             sell_orders.insert(price, val) ;
-            println!("added to buy orders") ;
+            self.log_sender.try_send(LogEvent::OrderPlaced {
+                price, order_type: OrderType::Sell, id: self.sell_orders_count, quantity
+            }).expect("unable to sent Log Event") ;
         }
     }
 }

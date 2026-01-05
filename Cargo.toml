@@ -5,6 +5,8 @@ edition = "2024"
 
 [dependencies]
 criterion = "0.8.1"
+crossbeam-channel = "0.5.15"
+crossbeam = "0.8.4"
 
 [[bench]]
 name = "engine_bench"

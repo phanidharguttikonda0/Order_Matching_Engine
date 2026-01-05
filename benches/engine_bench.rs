@@ -1,16 +1,17 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use matching_engine::{order_book, MatchingEngine}; // Imports your functions
-use std::collections::BTreeMap;
+use matching_engine::{MatchingEngine}; // Imports your functions
+use crossbeam_channel::bounded;
 
 fn benchmark_orders(c: &mut Criterion) {
     c.bench_function("buy_sell_cycle", |b| {
         b.iter(|| {
             // 1. Setup the data structures (Just like in your main)
-            let mut matching_engine = MatchingEngine::new() ;
+            let (tx, _rx) = bounded(100_000);
+            let mut matching_engine = MatchingEngine::new(tx) ;
 
             // 2. Run a loop of interactions
             // We simulate 100 orders to get a stable average
-            for i in 0..100 {
+            for _ in 0..100 {
                 let price = 10000; // 100.00
                 let quantity = 10;
 

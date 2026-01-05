@@ -1,3 +1,10 @@
+
+## Building Order Matching Engine
+
+#### Our End Goal is to Achieve around 1.5 Million requests per second as High Frequency Trading Systems Achieves.
+
+
+### Phase - 1
 #### In First GO (first code we got this result)
 Fastest Execution Time of each buy sell cycle : 4.34 ms
 
@@ -21,4 +28,24 @@ Slowest : 2.19 ms, 1.33 ms, 1.24 ms, 2.13 ms
 
 Totally 123K requests per second 2.8x faster than previous,
 
-#### Our End Goal is to Achieve around 1.5 Million requests per second
+
+### Phase - 2 (Doing Enhancements to current scenario)
+
+#### Phase - 2.1 Implementing Logger Event
+
+###### where the println are i/o bound task, which block the main thread execution. so spawning a system level thread and listening to a cross beam channel, every log will be added to the cross beam channel(which is a bounded channel) and write logs over there.
+
+##### Results: Phase - 2.1
+
+Fastest : 165.70 micro seconds
+
+Average : 170.26 micro seconds
+
+Slowest : 176.05 micro seconds
+
+Totally 1.1M requests per second , 9.5x faster than previous.
+
+Running I/O tasks in the background made the total Execution too Fast.
+
+### Changing Goal of executing 1.5M per second to 5M per second.
+

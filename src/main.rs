@@ -1,8 +1,6 @@
-
-
-use std::collections::{BTreeMap, VecDeque};
-use std::io;
-use matching_engine::{MatchingEngine};
+use std::{io, thread};
+use crossbeam_channel::bounded;
+use matching_engine::{LogEvent, MatchingEngine};
 
 
 
@@ -10,7 +8,23 @@ use matching_engine::{MatchingEngine};
 fn main() {
     println!("Welcome to the Stock Market Exchange");
     // need to take the input from the user
-    let mut matching_engine = MatchingEngine::new() ;
+    let (sender, receiver) = bounded::<LogEvent>(1024);
+
+    thread::spawn(move || {
+        // This loop runs forever in the background
+        while let Ok(event) = receiver.recv() {
+            match event {
+                LogEvent::OrderPlaced { id, price, order_type, quantity } => {
+                    println!("[LOG] {:?} Order #{} Placed: {} @ {}", order_type, id, quantity, price);
+                }
+                LogEvent::OrderExecuted { price, qty, remaining_quantity, order_type } => {
+                    println!("[LOG] ⚡ {:?} TRADE! Sold {} @ {} and remaining quantity to be executed was {}", order_type, qty, price, remaining_quantity);
+                }
+            }
+        }
+    });
+
+    let mut matching_engine = MatchingEngine::new(sender) ;
     let mut order = "".to_string();
     loop {
         println!("place an Order") ;
